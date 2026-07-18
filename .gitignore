@@ -1,0 +1,26 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+publish/
+
+# Installer output (built by ISCC.exe from GrowLinkAgent.iss; not distributed via git)
+GrowLinkAgent-Setup.exe
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Design-time / IntelliSense cache files
+*.lscache
+
+# Test results
+TestResults/
+*.trx
+
+# OS cruft
+Thumbs.db
+.DS_Store
