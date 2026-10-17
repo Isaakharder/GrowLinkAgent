@@ -16,26 +16,34 @@ try {
     $cred = New-Object System.Management.Automation.PSCredential (".\$user", $secure)
     $log = "C:\Users\Public\std-user-setup.log"
     Copy-Item $New C:\Users\Public\GrowLinkAgent-Setup.exe -Force
-    # Start-Process -Credential passes on this (administrator) process's TEMP, which the standard
-    # account can't write to; give setup a temp folder that account owns, as a real sign-in would.
-    $tmp = "C:\Users\Public\std-tmp-$user"
-    New-Item -ItemType Directory -Force $tmp | Out-Null
-    icacls $tmp /grant "${user}:(OI)(CI)F" | Out-Null
-    $cmd = "set TEMP=$tmp&& set TMP=$tmp&& start `"`" /wait C:\Users\Public\GrowLinkAgent-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=startup `"/LOG=$log`""
-    $p = Start-Process cmd.exe -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\Public -ArgumentList '/c', $cmd -PassThru
-    # Wait for setup only (not for the agent it starts at the end).
-    $null = $p.WaitForExit(600000)
-    $setupExit = $p.ExitCode
+    # Run setup through a scheduled task registered for that account: Windows then signs the
+    # account in properly (its own profile, AppData and TEMP), as when the user runs setup.
+    # (Start-Process -Credential from this service account doesn't give access to its AppData.)
+    $action = New-ScheduledTaskAction -Execute 'C:\Users\Public\GrowLinkAgent-Setup.exe' `
+        -Argument "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=startup `"/LOG=$log`""
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Password -RunLevel Limited
+    $task = "GrowLinkAgentStdUserTest-$user"
+    Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
+    Set-ScheduledTask -TaskName $task -User $user -Password $pass | Out-Null
+    Start-ScheduledTask -TaskName $task
+    Start-Sleep 3
+    $deadline = (Get-Date).AddMinutes(10)
+    while ((Get-ScheduledTask -TaskName $task).State -eq 'Running' -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+    $setupExit = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+    Unregister-ScheduledTask -TaskName $task -Confirm:$false
     Get-Process GrowLinkAgent -ErrorAction SilentlyContinue | Stop-Process -Force
-    $exe = "C:\Users\$user\AppData\Local\Programs\GrowLinkAgent\GrowLinkAgent.exe"
+    $profileDir = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user*" } | Select-Object -First 1).LocalPath
+    if (-not $profileDir) { $profileDir = "C:\Users\$user" }
+    $exe = "$profileDir\AppData\Local\Programs\GrowLinkAgent\GrowLinkAgent.exe"
     $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
     $lines = @(
         "standard user: $user (administrator: $isAdmin)",
-        "setup exit code (via cmd /c start /wait): $setupExit",
+        "setup exit code (scheduled task result): $setupExit",
         "installed for that user in AppData\Local\Programs: $(Test-Path $exe)",
         "setup log says Administrative install mode: No → $($text -match 'Administrative install mode: No')",
         "setup log says User privileges: $([regex]::Match($text, 'User privileges: (\w+)').Groups[1].Value)",
-        "Startup shortcut for that user: $(Test-Path "C:\Users\$user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\GrowLinkAgent.lnk")")
+        "Startup shortcut for that user: $(Test-Path "$profileDir\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\GrowLinkAgent.lnk")",
+        "profile: $profileDir")
     $lines | Set-Content "$Out/standard-user-install.txt"; $lines | ForEach-Object { Write-Host $_ }
     if (Test-Path $log) { Copy-Item $log "$Out/standard-user-setup.log" }
     if ($isAdmin -or -not (Test-Path $exe) -or $text -notmatch 'Administrative install mode: No') { throw 'standard-user install did not succeed as expected' }
