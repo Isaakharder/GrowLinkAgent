@@ -21,10 +21,18 @@ try {
     # (Start-Process -Credential from this service account doesn't give access to its AppData.)
     $action = New-ScheduledTaskAction -Execute 'C:\Users\Public\GrowLinkAgent-Setup.exe' `
         -Argument "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=startup `"/LOG=$log`""
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Password -RunLevel Limited
+    # A scheduled task with a stored password needs "Log on as a batch job" for that account
+    # (a right only; the account stays a standard user without administrator rights).
+    $sid = (Get-LocalUser $user).SID.Value
+    secedit /export /cfg C:\Users\Public\secpol.inf /areas USER_RIGHTS | Out-Null
+    $inf = Get-Content C:\Users\Public\secpol.inf
+    $inf = $inf -replace '^(SeBatchLogonRight = .*)$', "`$1,*$sid"
+    if (-not ($inf -match '^SeBatchLogonRight')) { $inf += "SeBatchLogonRight = *$sid" }
+    $inf | Set-Content C:\Users\Public\secpol-new.inf -Encoding Unicode
+    secedit /configure /db C:\Users\Public\secpol.sdb /cfg C:\Users\Public\secpol-new.inf /areas USER_RIGHTS | Out-Null
     $task = "GrowLinkAgentStdUserTest-$user"
-    Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
-    Set-ScheduledTask -TaskName $task -User $user -Password $pass | Out-Null
+    Register-ScheduledTask -TaskName $task -Action $action -User $user -Password $pass -RunLevel Limited `
+        -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
     Start-ScheduledTask -TaskName $task
     Start-Sleep 3
     $deadline = (Get-Date).AddMinutes(10)
