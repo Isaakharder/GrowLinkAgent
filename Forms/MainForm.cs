@@ -375,6 +375,13 @@ public sealed class MainForm : Form
         _tray.DoubleClick += (_, _) => ShowWindow();
     }
 
+    /// <summary>Another launch of the agent asked this (already running) one to show itself.</summary>
+    public void ShowFromAnotherLaunch()
+    {
+        if (!IsHandleCreated) return;
+        BeginInvoke(ShowWindow);
+    }
+
     private void ShowWindow()
     {
         Show();

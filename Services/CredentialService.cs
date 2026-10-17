@@ -11,17 +11,19 @@ namespace FlowMasterAgent.Services;
 /// </summary>
 public class CredentialService
 {
-    private static readonly string KeyFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "GrowLinkAgent", "secure.dat");
-
-    private static readonly string RouteKeyFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "GrowLinkAgent", "secure-routes.dat");
+    private readonly string KeyFile;
+    private readonly string RouteKeyFile;
 
     private readonly LogService _log;
 
-    public CredentialService(LogService log) => _log = log;
+    /// <param name="dataDir">Where the encrypted key files live (default %APPDATA%\GrowLinkAgent; tests use a temporary folder).</param>
+    public CredentialService(LogService log, string? dataDir = null)
+    {
+        _log = log;
+        var dir = dataDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrowLinkAgent");
+        KeyFile = Path.Combine(dir, "secure.dat");
+        RouteKeyFile = Path.Combine(dir, "secure-routes.dat");
+    }
 
     public bool SaveKey(string key)
     {
@@ -155,7 +157,7 @@ public class CredentialService
         }
     }
 
-    private static void SaveRouteKeyMap(Dictionary<string, string> routeKeys)
+    private void SaveRouteKeyMap(Dictionary<string, string> routeKeys)
     {
         var json = JsonSerializer.Serialize(routeKeys);
         var plaintext = Encoding.UTF8.GetBytes(json);

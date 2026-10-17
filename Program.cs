@@ -9,6 +9,18 @@ static class Program
     static void Main()
     {
         ApplicationConfiguration.Initialize();
+
+        // One agent per computer: a second launch shows the running one and exits.
+        using var instance = SingleInstance.Acquire();
+        if (instance.State == SingleInstance.Result.RunningForThisUser)
+            return;
+        if (instance.State == SingleInstance.Result.RunningForAnotherUser)
+        {
+            MessageBox.Show("GrowLinkAgent is already running on this computer for another Windows user. Only one agent may run at a time.",
+                "GrowLinkAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (s, e) =>
         {
@@ -22,6 +34,8 @@ static class Program
         var upload = new UploadService(config, credentials, log);
         var watcher = new FolderWatcherService(config, upload, log);
 
-        Application.Run(new MainForm(config, credentials, upload, watcher, log));
+        var form = new MainForm(config, credentials, upload, watcher, log);
+        instance.OnShowRequested(form.ShowFromAnotherLaunch);
+        Application.Run(form);
     }
 }
