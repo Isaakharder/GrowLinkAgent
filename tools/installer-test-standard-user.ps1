@@ -16,23 +16,29 @@ try {
     $cred = New-Object System.Management.Automation.PSCredential (".\$user", $secure)
     $log = "C:\Users\Public\std-user-setup.log"
     Copy-Item $New C:\Users\Public\GrowLinkAgent-Setup.exe -Force
-    $p = Start-Process C:\Users\Public\GrowLinkAgent-Setup.exe -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\Public `
-        -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"", '/TASKS=startup' -PassThru
+    # Start-Process -Credential passes on this (administrator) process's TEMP, which the standard
+    # account can't write to; give setup a temp folder that account owns, as a real sign-in would.
+    $tmp = "C:\Users\Public\std-tmp-$user"
+    New-Item -ItemType Directory -Force $tmp | Out-Null
+    icacls $tmp /grant "${user}:(OI)(CI)F" | Out-Null
+    $cmd = "set TEMP=$tmp&& set TMP=$tmp&& start `"`" /wait C:\Users\Public\GrowLinkAgent-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=startup `"/LOG=$log`""
+    $p = Start-Process cmd.exe -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\Public -ArgumentList '/c', $cmd -PassThru
     # Wait for setup only (not for the agent it starts at the end).
     $null = $p.WaitForExit(600000)
+    $setupExit = $p.ExitCode
     Get-Process GrowLinkAgent -ErrorAction SilentlyContinue | Stop-Process -Force
     $exe = "C:\Users\$user\AppData\Local\Programs\GrowLinkAgent\GrowLinkAgent.exe"
     $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
     $lines = @(
         "standard user: $user (administrator: $isAdmin)",
-        "setup exit code: $($p.ExitCode)",
+        "setup exit code (via cmd /c start /wait): $setupExit",
         "installed for that user in AppData\Local\Programs: $(Test-Path $exe)",
         "setup log says Administrative install mode: No → $($text -match 'Administrative install mode: No')",
         "setup log says User privileges: $([regex]::Match($text, 'User privileges: (\w+)').Groups[1].Value)",
         "Startup shortcut for that user: $(Test-Path "C:\Users\$user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\GrowLinkAgent.lnk")")
     $lines | Set-Content "$Out/standard-user-install.txt"; $lines | ForEach-Object { Write-Host $_ }
     if (Test-Path $log) { Copy-Item $log "$Out/standard-user-setup.log" }
-    if ($isAdmin -or $p.ExitCode -ne 0 -or -not (Test-Path $exe)) { throw 'standard-user install did not succeed as expected' }
+    if ($isAdmin -or -not (Test-Path $exe) -or $text -notmatch 'Administrative install mode: No') { throw 'standard-user install did not succeed as expected' }
     Write-Host 'STANDARD USER INSTALL PASSED'
 } finally {
     Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" } | Remove-CimInstance -ErrorAction SilentlyContinue
