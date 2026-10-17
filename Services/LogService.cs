@@ -2,11 +2,13 @@ namespace FlowMasterAgent.Services;
 
 public class LogService
 {
-    private static readonly string LogDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "GrowLinkAgent", "logs");
+    private readonly string LogDir;
 
     private readonly object _lock = new();
+
+    /// <param name="logDir">Where the daily log files go (default %APPDATA%\GrowLinkAgent\logs).</param>
+    public LogService(string? logDir = null) =>
+        LogDir = logDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrowLinkAgent", "logs");
 
     public event Action<string>? OnLog;
 

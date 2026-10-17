@@ -89,7 +89,7 @@ public class BlockSummaryCsvParserTimezoneTests : IDisposable
 
     [Theory]
     [MemberData(nameof(SampleFiles))]
-    public void RealSampleFiles_ProduceCorrectedUtcTimestamp(string filename, string expectedUtc)
+    public void SampleFiles_ProduceCorrectedUtcTimestamp(string filename, string expectedUtc)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "SampleFiles", filename);
         Assert.True(File.Exists(path), $"Sample fixture not found: {path}");

@@ -14,23 +14,128 @@ public class UploadService
     private const int RetryDelayMs = 5_000;
     private const int FileReadyTimeoutMs = 15_000;
 
+    /// <summary>Waits between the quick attempts at one Block Summary file (then it goes on the retry schedule).</summary>
+    public static readonly TimeSpan[] DefaultClimateAttemptDelays = [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15)];
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromMinutes(15);
+
+    /// <summary>The end of one Block Summary upload attempt.</summary>
+    private sealed record ClimateAttempt(UploadOutcome Outcome, int? HttpStatus, string Detail, TimeSpan? RetryAfter = null);
+
     private readonly ConfigService _config;
     private readonly CredentialService _credentials;
     private readonly LogService _log;
     private readonly FileRoutingService _routing;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
+    private readonly HttpClient _http;
+    private readonly RetrySchedule _schedule;
+    private readonly TimeSpan[] _climateAttemptDelays;
+    // Files that matched no route, or sit in the Block Summary folder without being Block Summary
+    // exports: not looked at again on every rescan unless they change (path → length/last-write).
+    private readonly ConcurrentDictionary<string, (long Length, DateTime LastWriteUtc)> _ignoredUntilChanged = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _summaryLock = new();
     private readonly ConcurrentDictionary<string, byte> _activeFiles = new(StringComparer.OrdinalIgnoreCase);
 
     public BatchSummary Summary { get; } = new();
     public event Action<BatchSummary>? SummaryUpdated;
 
-    public UploadService(ConfigService config, CredentialService credentials, LogService log)
+    public UploadService(ConfigService config, CredentialService credentials, LogService log,
+        RetrySchedule? schedule = null, TimeSpan[]? climateAttemptDelays = null, HttpClient? http = null)
     {
         _config = config;
         _credentials = credentials;
         _log = log;
         _routing = new FileRoutingService();
+        _schedule = schedule ?? new RetrySchedule();
+        _climateAttemptDelays = climateAttemptDelays ?? DefaultClimateAttemptDelays;
+        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+    }
+
+    /// <summary>
+    /// Whether a rescan should pick this file up now: not waiting out a retry delay, and not a
+    /// non-Block-Summary file that hasn't changed since it was looked at.
+    /// </summary>
+    public bool IsDue(string path)
+    {
+        if (!_schedule.IsDue(path, DateTime.UtcNow)) return false;
+        if (_ignoredUntilChanged.TryGetValue(path, out var seen))
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists && info.Length == seen.Length && info.LastWriteTimeUtc == seen.LastWriteUtc) return false;
+            }
+            catch { /* fall through: look again */ }
+            _ignoredUntilChanged.TryRemove(path, out _);
+        }
+        return true;
+    }
+
+    /// <summary>Forgets files that have gone and refreshes the waiting count.</summary>
+    public void PruneRetries()
+    {
+        _schedule.Prune();
+        UpdatePending();
+    }
+
+    /// <summary>"Retry now": every file waiting for a retry is tried at the next rescan.</summary>
+    public void RetryNow()
+    {
+        _schedule.MakeAllDue(DateTime.UtcNow);
+        _log.Info("Retry now: waiting files will be tried at once.");
+    }
+
+    /// <summary>
+    /// "Retry failed files": moves Block Summary files from the Failed folder back into the
+    /// Block Summary folder so they are uploaded again (the server recognises duplicates).
+    /// </summary>
+    public int RequeueFailedBlockSummaryFiles()
+    {
+        var folder = _config.Config.BlockSummaryFolder?.Trim();
+        if (string.IsNullOrEmpty(folder)) return 0;
+        var failed = Path.Combine(folder, "Failed");
+        if (!Directory.Exists(failed)) return 0;
+        var moved = 0;
+        foreach (var file in Directory.EnumerateFiles(failed, "*.csv", SearchOption.TopDirectoryOnly))
+        {
+            var dest = Path.Combine(folder, Path.GetFileName(file));
+            if (File.Exists(dest))
+            {
+                _log.Warn($"Retry failed files: '{Path.GetFileName(file)}' is already in the folder; left in Failed.");
+                continue;
+            }
+            try
+            {
+                File.Move(file, dest);
+                var note = file + ".error.txt";
+                if (File.Exists(note)) File.Delete(note);
+                moved++;
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Retry failed files: couldn't move '{file}': {ex.Message}");
+            }
+        }
+        _log.Info($"Retry failed files: {moved} file(s) moved back for upload.");
+        return moved;
+    }
+
+    private void IgnoreUntilChanged(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            _ignoredUntilChanged[path] = (info.Length, info.LastWriteTimeUtc);
+        }
+        catch { /* it will simply be looked at again */ }
+    }
+
+    private void UpdatePending()
+    {
+        lock (_summaryLock)
+        {
+            Summary.PendingRetry = _schedule.Count;
+            Summary.NextRetryUtc = _schedule.Next?.NextUtc;
+        }
+        SummaryUpdated?.Invoke(Summary);
     }
 
     public async Task<bool> PingAsync()
@@ -208,7 +313,10 @@ public class UploadService
             if (routeMode)
             {
                 if (route is null)
+                {
+                    IgnoreUntilChanged(fullPath);
                     return;
+                }
 
                 var slot = string.IsNullOrWhiteSpace(route.KeySlot) ? route.Id : route.KeySlot;
                 keyOverride = _credentials.LoadRouteKey(slot);
@@ -224,6 +332,12 @@ public class UploadService
                     _log.Error($"Matched route '{route.Name}' ({route.Id}) has no server URL configured. Leaving file in place.");
                     return;
                 }
+            }
+
+            if (route?.Id == "block-summary")
+            {
+                await ProcessBlockSummaryAsync(fullPath, fileName, keyOverride, serverUrlOverride);
+                return;
             }
 
             bool wasDuplicate = false;
@@ -254,9 +368,7 @@ public class UploadService
 
                 try
                 {
-                    var result = route?.Id == "block-summary"
-                        ? await UploadBlockSummaryAsync(fullPath, keyOverride, serverUrlOverride)
-                        : await UploadFileAsync(fullPath, keyOverride, serverUrlOverride);
+                    var result = await UploadFileAsync(fullPath, keyOverride, serverUrlOverride);
                     if (result.Success)
                     {
                         lock (_summaryLock)
@@ -329,6 +441,7 @@ public class UploadService
         catch (InvalidDataException ex)
         {
             _log.Warn($"Block Summary folder: '{fileName}' is not a valid Block Summary CSV ({ex.Message}) — leaving file in place, not uploading.");
+            IgnoreUntilChanged(fullPath);
             return (null, true);
         }
     }
@@ -396,93 +509,143 @@ public class UploadService
         return new UploadResult(false, false);
     }
 
-    private async Task<UploadResult> UploadBlockSummaryAsync(string filePath, string? keyOverride, string? serverUrlOverride)
+    // Block Summary (climate) files. A file moves to Uploaded only after the server answered 2xx,
+    // which the climate server sends only once the file's original bytes and status are committed.
+    // Temporary problems (network, timeouts, 408/425/429, 5xx) and key problems (401/403) never
+    // move a file: it stays in the folder and is retried with growing delays, so it recovers on its
+    // own after an outage or once the key is fixed. Any other 4xx means this file can't be accepted
+    // as sent: it moves to Failed with a note, and "Retry failed files" brings it back.
+    private async Task ProcessBlockSummaryAsync(string fullPath, string fileName, string? keyOverride, string? serverUrlOverride)
+    {
+        var ready = await WaitForFileReady(fullPath);
+        if (!ready.IsReady)
+        {
+            _log.Warn($"File not ready after {FileReadyTimeoutMs / 1000}s; left in place for the next scan: {fileName}");
+            lock (_summaryLock) { Summary.Skipped++; Summary.LastSync = DateTime.Now; }
+            SummaryUpdated?.Invoke(Summary);
+            return;
+        }
+
+        ClimateAttempt attempt = new(UploadOutcome.Transient, null, "not attempted");
+        for (var i = 0; ; i++)
+        {
+            attempt = await UploadBlockSummaryAsync(fullPath, keyOverride, serverUrlOverride);
+            if (attempt.Outcome != UploadOutcome.Transient || i >= _climateAttemptDelays.Length) break;
+            var wait = attempt.RetryAfter is { } ra && ra > _climateAttemptDelays[i] ? ra : _climateAttemptDelays[i];
+            _log.Warn($"{fileName}: {attempt.Detail} — trying again in {wait.TotalSeconds:0}s (attempt {i + 2}/{_climateAttemptDelays.Length + 1}).");
+            await Task.Delay(wait);
+        }
+
+        switch (attempt.Outcome)
+        {
+            case UploadOutcome.Accepted:
+                _schedule.Clear(fullPath);
+                lock (_summaryLock) { Summary.Succeeded++; Summary.LastSync = DateTime.Now; Summary.LastProblem = null; }
+                MoveFile(fullPath, UploadedFolder(fullPath));
+                break;
+
+            case UploadOutcome.Transient:
+            case UploadOutcome.Unauthorized:
+            {
+                var next = _schedule.RecordFailure(fullPath, attempt.Detail, DateTime.UtcNow, attempt.RetryAfter);
+                var why = attempt.Outcome == UploadOutcome.Unauthorized
+                    ? $"upload key refused ({attempt.HttpStatus}) — check the key in the Synopta tab"
+                    : attempt.Detail;
+                _log.Warn($"{fileName}: {why}. Kept in the folder; next try at {next.ToLocalTime():HH:mm:ss}.");
+                lock (_summaryLock) { Summary.LastSync = DateTime.Now; Summary.LastProblem = $"{DateTime.Now:HH:mm} {why}"; }
+                break;
+            }
+
+            case UploadOutcome.Rejected:
+            {
+                _schedule.Clear(fullPath);
+                _log.Error($"{fileName}: refused by the server ({attempt.HttpStatus}): {attempt.Detail}. Moved to Failed; use \"Retry failed files\" after fixing the cause.");
+                lock (_summaryLock) { Summary.Failed++; Summary.LastSync = DateTime.Now; Summary.LastProblem = $"{DateTime.Now:HH:mm} {fileName} refused ({attempt.HttpStatus})"; }
+                var failedDir = FailedFolder(fullPath);
+                MoveFile(fullPath, failedDir);
+                try
+                {
+                    File.WriteAllText(Path.Combine(failedDir, fileName + ".error.txt"),
+                        $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} HTTP {attempt.HttpStatus}: {attempt.Detail}{Environment.NewLine}");
+                }
+                catch { /* the log has it */ }
+                break;
+            }
+        }
+        UpdatePending();
+    }
+
+    private async Task<ClimateAttempt> UploadBlockSummaryAsync(string filePath, string? keyOverride, string? serverUrlOverride)
     {
         var filename = Path.GetFileName(filePath);
 
         var serverUrl = serverUrlOverride ?? _config.Config.ServerUrl?.Trim();
         if (string.IsNullOrEmpty(serverUrl))
-        {
-            _log.Error("CropLink upload aborted: server URL is not configured.");
-            return new UploadResult(false, false);
-        }
+            return new ClimateAttempt(UploadOutcome.Unauthorized, null, "server URL is not configured");
 
         var key = keyOverride ?? _credentials.LoadKey();
         if (string.IsNullOrEmpty(key))
+            return new ClimateAttempt(UploadOutcome.Unauthorized, null, "upload key is not configured");
+
+        // Read once: these exact bytes are hashed, parsed and sent.
+        byte[] raw;
+        try
         {
-            _log.Error("CropLink upload aborted: route key is not configured.");
-            return new UploadResult(false, false);
+            raw = await File.ReadAllBytesAsync(filePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ClimateAttempt(UploadOutcome.Transient, null, $"couldn't read the file ({ex.Message})");
         }
 
         BlockSummaryCsvParser.ParseResult parsed;
         try
         {
-            parsed = new BlockSummaryCsvParser().Parse(filePath);
+            parsed = new BlockSummaryCsvParser().ParseBytes(raw, filename);
         }
         catch (InvalidDataException ex)
         {
-            _log.Error($"CropLink CSV parse failed — do not move file: {ex.Message}");
             RecordCropLinkImport(filename, null, "Failed", null, null);
-            return new UploadResult(false, false);
+            return new ClimateAttempt(UploadOutcome.Rejected, null, $"not a readable Block Summary export ({ex.Message})");
         }
 
-        _log.Info($"CropLink: parsed {parsed.Readings.Count} reading(s) from '{parsed.Filename}'");
+        var destination = Destination.Describe(serverUrl);
+        _log.Info($"Climate upload to {destination.Label}: '{filename}' ({raw.Length} bytes, {parsed.Readings.Count} parsed readings, {BlockSummaryCsvParser.HashTag(raw)[..19]}…)");
 
-        var body = new
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{serverUrl.TrimEnd('/')}/api/v1/climate/imports")
         {
-            file_hash = parsed.FileHash,
-            filename  = parsed.Filename,
-            readings  = parsed.Readings.Select(r => new
-            {
-                zone_label   = r.ZoneLabel,
-                measured_at  = r.MeasuredAt,
-                metric_name  = r.MetricName,
-                value        = r.Value,
-                unit         = r.Unit,
-            }).ToArray()
-        };
-
-        var json = System.Text.Json.JsonSerializer.Serialize(body);
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post, $"{serverUrl.TrimEnd('/')}/api/v1/climate/imports")
-        {
-            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            Content = new StringContent(ClimateUpload.BuildBody(raw, filename, parsed), System.Text.Encoding.UTF8, "application/json"),
         };
         request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
 
-        var response = await _http.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
-        var httpStatus = (int)response.StatusCode;
-
-        if (response.IsSuccessStatusCode)
-        {
-            var (resultLabel, importId) = ParseCropLinkImportResponse(responseBody);
-            _log.Info($"CropLink: accepted '{parsed.Filename}' ({parsed.Readings.Count} readings) — {httpStatus} ({resultLabel}, import_id={importId})");
-            RecordCropLinkImport(parsed.Filename, parsed.Readings.Count, resultLabel, httpStatus, importId);
-            return new UploadResult(true, false);
-        }
-
-        _log.Error(
-            $"CropLink rejected ({httpStatus}) '{parsed.Filename}': " +
-            $"{responseBody[..Math.Min(500, responseBody.Length)]}");
-        RecordCropLinkImport(parsed.Filename, parsed.Readings.Count, "Failed", httpStatus, null);
-        return new UploadResult(false, false);
-    }
-
-    private static (string ResultLabel, string? ImportId) ParseCropLinkImportResponse(string body)
-    {
+        HttpResponseMessage response;
+        string responseBody;
         try
         {
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-            var status = root.TryGetProperty("status", out var s) ? s.GetString() : null;
-            var importId = root.TryGetProperty("import_id", out var i) ? i.GetString() : null;
-            var label = string.Equals(status, "duplicate", StringComparison.OrdinalIgnoreCase) ? "Duplicate" : "Created";
-            return (label, importId);
+            response = await _http.SendAsync(request);
+            responseBody = await response.Content.ReadAsStringAsync();
         }
-        catch
+        catch (Exception ex) when (ClimateUpload.IsTransient(ex))
         {
-            return ("Created", null);
+            RecordCropLinkImport(filename, parsed.Readings.Count, "Waiting to retry", null, null);
+            return new ClimateAttempt(UploadOutcome.Transient, null, $"no answer from the server ({ex.GetType().Name}: {ex.Message})");
+        }
+
+        using (response)
+        {
+            var status = (int)response.StatusCode;
+            var outcome = ClimateUpload.Classify(response.StatusCode);
+            if (outcome == UploadOutcome.Accepted)
+            {
+                var (label, importId) = ClimateUpload.ReadAcceptance(responseBody);
+                _log.Info($"Climate upload accepted: '{filename}' — {status} {label} (import_id={importId})");
+                RecordCropLinkImport(filename, parsed.Readings.Count, label, status, importId);
+                return new ClimateAttempt(UploadOutcome.Accepted, status, label);
+            }
+
+            var snippet = responseBody[..Math.Min(300, responseBody.Length)];
+            RecordCropLinkImport(filename, parsed.Readings.Count, outcome == UploadOutcome.Rejected ? "Failed" : "Waiting to retry", status, null);
+            return new ClimateAttempt(outcome, status, $"HTTP {status} {snippet}", ClimateUpload.RetryAfter(response, MaxRetryAfter));
         }
     }
 

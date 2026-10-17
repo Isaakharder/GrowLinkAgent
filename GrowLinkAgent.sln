@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrowLinkAgent", "GrowLinkAg
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrowLinkAgent.Tests", "GrowLinkAgent.Tests\GrowLinkAgent.Tests.csproj", "{BCF115CD-1929-470D-9A84-02D0A18A1038}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrowLinkAgent.CoreTests", "GrowLinkAgent.CoreTests\GrowLinkAgent.CoreTests.csproj", "{269748BD-EB0A-4888-8DD3-2DDB9DEEF341}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,6 +22,10 @@ Global
 		{BCF115CD-1929-470D-9A84-02D0A18A1038}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BCF115CD-1929-470D-9A84-02D0A18A1038}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BCF115CD-1929-470D-9A84-02D0A18A1038}.Release|Any CPU.Build.0 = Release|Any CPU
+		{269748BD-EB0A-4888-8DD3-2DDB9DEEF341}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{269748BD-EB0A-4888-8DD3-2DDB9DEEF341}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{269748BD-EB0A-4888-8DD3-2DDB9DEEF341}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{269748BD-EB0A-4888-8DD3-2DDB9DEEF341}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

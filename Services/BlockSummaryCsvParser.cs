@@ -20,16 +20,28 @@ public sealed class BlockSummaryCsvParser
         string Filename,
         IReadOnlyList<ClimateReading> Readings);
 
+    /// <summary>"sha256-" + lowercase hex of the bytes (the form the servers expect).</summary>
+    public static string HashTag(byte[] bytes) => "sha256-" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
     private static readonly Regex ZoneColumnPattern = new(@"^zone\s*\d+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public ParseResult Parse(string filePath)
-    {
-        var fileName = Path.GetFileName(filePath);
-        var rawBytes = File.ReadAllBytes(filePath);
-        var fileHash = "sha256-" + Convert.ToHexString(SHA256.HashData(rawBytes)).ToLowerInvariant();
+    public ParseResult Parse(string filePath) => ParseBytes(File.ReadAllBytes(filePath), Path.GetFileName(filePath));
 
-        var lines = File.ReadAllLines(filePath, Encoding.UTF8)
-            .Select(l => l.Trim())
+    /// <summary>
+    /// Parses an export already read into memory, so the bytes that are hashed,
+    /// parsed and uploaded are the very same bytes.
+    /// </summary>
+    public ParseResult ParseBytes(byte[] rawBytes, string fileName)
+    {
+        var fileHash = HashTag(rawBytes);
+
+        // Same decoding as File.ReadAllLines(path, Encoding.UTF8): a byte-order mark is
+        // honoured and dropped, invalid bytes (e.g. Windows-1252 "°") become U+FFFD.
+        string text;
+        using (var reader = new StreamReader(new MemoryStream(rawBytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+            text = reader.ReadToEnd();
+        var lines = text.Split('\n')
+            .Select(l => l.TrimEnd('\r').Trim())
             .Where(l => l.Length > 0)
             .ToList();
 

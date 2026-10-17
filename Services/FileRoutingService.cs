@@ -9,7 +9,7 @@ public sealed class FileRoutingService
         new UploadRoute
         {
             Id = "block-summary",
-            Name = "Block Summary/CropLink",
+            Name = "Block Summary (climate)",
             KeySlot = "block-summary",
             Enabled = true,
             Match = new RouteMatchConfig

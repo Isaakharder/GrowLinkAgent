@@ -22,7 +22,11 @@ public sealed class MainForm : Form
     private Button _btnBrowse = null!;
     private Button _btnTestGrowLink = null!;
 
-    // Synopta tab (CropLink route: "block-summary")
+    // Synopta tab (climate route: "block-summary"; Plants, or legacy CropLink)
+    private Label _lblClimateIntro = null!;
+    private Label _lblDestination = null!;
+    private Button _btnRetryNow = null!;
+    private Button _btnRetryFailed = null!;
     private TextBox _txtCropLinkUrl = null!;
     private TextBox _txtCropLinkKey = null!;
     private TextBox _txtBlockSummaryFolder = null!;
@@ -79,7 +83,7 @@ public sealed class MainForm : Form
     private void InitializeLayout()
     {
         Text = "GrowLinkAgent";
-        Size = new Size(760, 820);
+        Size = new Size(780, 900);
         MinimumSize = new Size(480, 560);
         FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterScreen;
@@ -95,7 +99,7 @@ public sealed class MainForm : Form
         };
 
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 270));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 360));
         for (int i = 0; i < 6; i++)
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -247,63 +251,109 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
-            RowCount = 6,
-            Padding = new Padding(14, 16, 14, 12),
+            RowCount = 7,
+            Padding = new Padding(14, 12, 14, 10),
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 7; i++)
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var intro = new Label
+        _lblClimateIntro = new Label
         {
-            Text = "Synopta sends Block Summary climate data to CropLink.",
+            Text = "Synopta sends Block Summary climate data to the server below.",
             Dock = DockStyle.Fill,
+            AutoSize = true,
             ForeColor = Color.DimGray,
-            Margin = new Padding(0, 0, 0, 14),
+            Margin = new Padding(0, 0, 0, 10),
         };
-        panel.Controls.Add(intro, 0, 0);
-        panel.SetColumnSpan(intro, 3);
+        panel.Controls.Add(_lblClimateIntro, 0, 0);
+        panel.SetColumnSpan(_lblClimateIntro, 3);
 
-        panel.Controls.Add(RightLabel("CropLink Server URL:"), 0, 1);
+        panel.Controls.Add(RightLabel("Server URL:"), 0, 1);
         _txtCropLinkUrl = Input();
+        _txtCropLinkUrl.TextChanged += (_, _) => ShowDestination();
         panel.Controls.Add(_txtCropLinkUrl, 1, 1);
         panel.SetColumnSpan(_txtCropLinkUrl, 2);
 
-        panel.Controls.Add(RightLabel("CropLink API Key:"), 0, 2);
+        // Where the URL above sends files: Plants production / Plants staging / CropLink (legacy).
+        _lblDestination = new Label
+        {
+            Text = "Destination: not set",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 8),
+        };
+        panel.Controls.Add(_lblDestination, 1, 2);
+        panel.SetColumnSpan(_lblDestination, 2);
+
+        panel.Controls.Add(RightLabel("Upload key:"), 0, 3);
         _txtCropLinkKey = Input(password: true);
-        panel.Controls.Add(_txtCropLinkKey, 1, 2);
+        panel.Controls.Add(_txtCropLinkKey, 1, 3);
         panel.SetColumnSpan(_txtCropLinkKey, 2);
 
-        panel.Controls.Add(RightLabel("Block Summary Watch Folder:"), 0, 3);
+        panel.Controls.Add(RightLabel("Block Summary Watch Folder:"), 0, 4);
         _txtBlockSummaryFolder = Input();
-        panel.Controls.Add(_txtBlockSummaryFolder, 1, 3);
+        panel.Controls.Add(_txtBlockSummaryFolder, 1, 4);
         _btnBrowseBlockSummary = new Button { Text = "Browse…", Dock = DockStyle.Fill, Margin = new Padding(4, 6, 0, 10) };
         _btnBrowseBlockSummary.Click += OnBrowseBlockSummaryFolder;
-        panel.Controls.Add(_btnBrowseBlockSummary, 2, 3);
+        panel.Controls.Add(_btnBrowseBlockSummary, 2, 4);
 
-        var testRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
-        _btnTestCropLink = Btn("Test CropLink Connection");
+        var testRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+        _btnTestCropLink = Btn("Test Connection");
         _btnTestCropLink.Click += OnTestCropLink;
         testRow.Controls.Add(_btnTestCropLink);
-        panel.Controls.Add(testRow, 1, 4);
+        _btnRetryNow = Btn("Retry now");
+        _btnRetryNow.Click += (_, _) => { _upload.RetryNow(); _watcher.Rescan(); };
+        testRow.Controls.Add(_btnRetryNow);
+        _btnRetryFailed = Btn("Retry failed files");
+        _btnRetryFailed.Click += OnRetryFailed;
+        testRow.Controls.Add(_btnRetryFailed);
+        panel.Controls.Add(testRow, 1, 5);
         panel.SetColumnSpan(testRow, 2);
 
         _lblCropLinkSummary = new Label
         {
-            Text = "No CropLink uploads yet.",
+            Text = "No climate uploads yet.",
             AutoSize = false,
-            Height = 100,
+            Height = 112,
             Dock = DockStyle.Top,
             Font = new Font("Consolas", 8.5f),
             ForeColor = Color.DimGray,
-            Margin = new Padding(0, 14, 0, 0),
+            Margin = new Padding(0, 10, 0, 0),
         };
-        panel.Controls.Add(_lblCropLinkSummary, 0, 5);
+        panel.Controls.Add(_lblCropLinkSummary, 0, 6);
         panel.SetColumnSpan(_lblCropLinkSummary, 3);
 
         return panel;
+    }
+
+    private void ShowDestination()
+    {
+        var d = Destination.Describe(_txtCropLinkUrl.Text);
+        _lblDestination.Text = d.Warning is null ? $"Destination: {d.Label}" : $"Destination: {d.Label}{Environment.NewLine}⚠ {d.Warning}";
+        _lblDestination.ForeColor = d.Kind switch
+        {
+            DestinationKind.PlantsProduction => Color.ForestGreen,
+            DestinationKind.PlantsStaging => Color.DarkOrange,
+            DestinationKind.CropLinkLegacy => Color.DimGray,
+            DestinationKind.NotSet => Color.DimGray,
+            _ => Color.Firebrick,
+        };
+        if (d.Warning is not null && d.Kind is not (DestinationKind.Unknown or DestinationKind.Invalid))
+            _lblDestination.ForeColor = Color.Firebrick;
+        _lblClimateIntro.Text = d.Kind == DestinationKind.NotSet
+            ? "Synopta sends Block Summary climate data to the server below."
+            : $"Synopta sends Block Summary climate data to: {d.Label}.";
+    }
+
+    private void OnRetryFailed(object? sender, EventArgs e)
+    {
+        var moved = _upload.RequeueFailedBlockSummaryFiles();
+        _watcher.Rescan();
+        MessageBox.Show(moved == 0 ? "No Block Summary files in the Failed folder." : $"{moved} file(s) moved back for upload.",
+            "GrowLinkAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // ── Tray ──────────────────────────────────────────────────────────────────
@@ -352,10 +402,20 @@ public sealed class MainForm : Form
             _txtCropLinkUrl.Text = _config.GetRouteServerUrl("block-summary") ?? string.Empty;
             _txtCropLinkKey.Text = _credentials.LoadRouteKey(GetSlot(block)) ?? string.Empty;
         }
+        ShowDestination();
     }
 
     private void OnSave(object? sender, EventArgs e)
     {
+        // Changing where climate files go is deliberate: say so before saving.
+        var before = Destination.Describe(_config.GetRouteServerUrl("block-summary"));
+        var after = Destination.Describe(_txtCropLinkUrl.Text);
+        if (before.Kind != after.Kind && before.Kind != DestinationKind.NotSet &&
+            MessageBox.Show(
+                $"Climate files will go to:{Environment.NewLine}{after.Label}{Environment.NewLine}{Environment.NewLine}instead of:{Environment.NewLine}{before.Label}{Environment.NewLine}{Environment.NewLine}Save this change?",
+                "GrowLinkAgent — change climate destination", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
+            return;
+
         try
         {
             var routeConfigs = new List<RouteConfig>
@@ -408,13 +468,14 @@ public sealed class MainForm : Form
             var results = await _upload.PingRouteKeysAsync([route]);
             var result = results[0];
 
+            var destination = Destination.Describe(_config.GetRouteServerUrl("block-summary"));
             if (result.Success)
                 MessageBox.Show(
-                    $"CropLink connection successful{Environment.NewLine}Organization: {result.OrganizationName}",
+                    $"Connection successful{Environment.NewLine}Destination: {destination.Label}{Environment.NewLine}Organization: {result.OrganizationName}",
                     "GrowLinkAgent", MessageBoxButtons.OK, MessageBoxIcon.Information);
             else
                 MessageBox.Show(
-                    $"CropLink authentication failed{Environment.NewLine}{result.Message}",
+                    $"Connection failed{Environment.NewLine}Destination: {destination.Label}{Environment.NewLine}{result.Message}{Environment.NewLine}{Environment.NewLine}(Tests the saved settings — press Save Configuration first after changing them.)",
                     "GrowLinkAgent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         catch (Exception ex)
@@ -425,7 +486,7 @@ public sealed class MainForm : Form
         finally
         {
             _btnTestCropLink.Enabled = true;
-            _btnTestCropLink.Text = "Test CropLink Connection";
+            _btnTestCropLink.Text = "Test Connection";
         }
     }
 
@@ -498,7 +559,7 @@ public sealed class MainForm : Form
     {
         using var dlg = new FolderBrowserDialog
         {
-            Description = "Select the dedicated CropLink Block Summary export folder",
+            Description = "Select the dedicated Synopta Block Summary export folder",
             UseDescriptionForTitle = true,
         };
         if (!string.IsNullOrEmpty(_txtBlockSummaryFolder.Text))
@@ -543,17 +604,17 @@ public sealed class MainForm : Form
             $"Failed:     {s.Failed}";
         _lblSummary.ForeColor = s.Failed > 0 ? Color.Firebrick : Color.DimGray;
 
-        if (s.LastCropLinkTime.HasValue)
+        if (s.LastCropLinkTime.HasValue || s.PendingRetry > 0)
         {
-            var cropLinkTime = s.LastCropLinkTime.Value.ToString("HH:mm:ss");
+            var time = s.LastCropLinkTime?.ToString("HH:mm:ss") ?? "—";
+            var next = s.NextRetryUtc.HasValue ? $" (next {s.NextRetryUtc.Value.ToLocalTime():HH:mm:ss})" : "";
             _lblCropLinkSummary.Text =
-                $"Last CropLink filename: {s.LastCropLinkFilename}{Environment.NewLine}" +
-                $"Parsed readings:        {s.LastCropLinkReadingsParsed?.ToString() ?? "—"}{Environment.NewLine}" +
-                $"Result:                 {s.LastCropLinkResult}{Environment.NewLine}" +
-                $"HTTP status:            {s.LastCropLinkHttpStatus?.ToString() ?? "—"}{Environment.NewLine}" +
-                $"Import ID:              {s.LastCropLinkImportId ?? "—"}{Environment.NewLine}" +
-                $"Time:                   {cropLinkTime}";
-            _lblCropLinkSummary.ForeColor = s.LastCropLinkResult == "Failed" ? Color.Firebrick : Color.DimGray;
+                $"Last file:        {s.LastCropLinkFilename ?? "—"}{Environment.NewLine}" +
+                $"Result:           {s.LastCropLinkResult ?? "—"}  (HTTP {s.LastCropLinkHttpStatus?.ToString() ?? "—"}, {time}){Environment.NewLine}" +
+                $"Import ID:        {s.LastCropLinkImportId ?? "—"}{Environment.NewLine}" +
+                $"Waiting to retry: {s.PendingRetry}{next}{Environment.NewLine}" +
+                $"Last problem:     {s.LastProblem ?? "none"}";
+            _lblCropLinkSummary.ForeColor = s.LastCropLinkResult == "Failed" || s.PendingRetry > 0 ? Color.Firebrick : Color.DimGray;
         }
     }
 

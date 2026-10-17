@@ -10,6 +10,8 @@
     <RootNamespace>GrowLinkAgent</RootNamespace>
     <Product>GrowLinkAgent</Product>
     <Description>GrowLink PDF upload agent</Description>
+    <!-- Sent with every climate upload (agent_version); keep in step with GrowLinkAgent.iss. -->
+    <Version>1.1.0</Version>
     <Company>GrowLink</Company>
     <ApplicationIcon>Assets\App.ico</ApplicationIcon>
     <Platforms>AnyCPU</Platforms>
@@ -29,6 +31,7 @@
     <!-- GrowLinkAgent.Tests lives under this project's own directory; without this,
          the default SDK glob would compile its files into this project too. -->
     <Compile Remove="GrowLinkAgent.Tests\**" />
+    <Compile Remove="GrowLinkAgent.CoreTests\**" />
   </ItemGroup>
 
 </Project>

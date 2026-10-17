@@ -11,15 +11,23 @@ public class FolderWatcherService : IDisposable
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly HashSet<string> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private readonly TimeSpan _rescanInterval;
+    private readonly List<string> _folders = new();
+    private System.Threading.Timer? _rescanTimer;
 
     public event Action<string>? StatusChanged;
     public bool IsWatching { get; private set; }
 
-    public FolderWatcherService(ConfigService config, UploadService upload, LogService log)
+    /// <param name="rescanInterval">
+    /// How often the folders are looked through again (default 1 minute): files kept after a
+    /// temporary failure are retried once due, and a file the watcher missed is still found.
+    /// </param>
+    public FolderWatcherService(ConfigService config, UploadService upload, LogService log, TimeSpan? rescanInterval = null)
     {
         _config = config;
         _upload = upload;
         _log = log;
+        _rescanInterval = rescanInterval ?? TimeSpan.FromMinutes(1);
     }
 
     public void Start()
@@ -68,6 +76,7 @@ public class FolderWatcherService : IDisposable
 
             _watchers.Add(watcher);
             started.Add(folder);
+            lock (_lock) _folders.Add(folder);
             _log.Info($"Watching: {folder}");
 
             var folderToScan = folder;
@@ -75,6 +84,8 @@ public class FolderWatcherService : IDisposable
         }
 
         IsWatching = started.Count > 0;
+        if (IsWatching)
+            _rescanTimer = new System.Threading.Timer(_ => Rescan(), null, _rescanInterval, _rescanInterval);
 
         if (started.Count == 0)
         {
@@ -89,6 +100,9 @@ public class FolderWatcherService : IDisposable
 
     public void Stop()
     {
+        _rescanTimer?.Dispose();
+        _rescanTimer = null;
+        lock (_lock) _folders.Clear();
         foreach (var watcher in _watchers)
         {
             watcher.EnableRaisingEvents = false;
@@ -181,6 +195,31 @@ public class FolderWatcherService : IDisposable
         }
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>Looks through the watched folders now (also used by "Retry now").</summary>
+    public void Rescan()
+    {
+        string[] folders;
+        lock (_lock) folders = _folders.ToArray();
+        _upload.PruneRetries();
+        foreach (var folder in folders)
+        {
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly))
+                {
+                    if (!IsSupportedFile(f) || !_upload.IsDue(f)) continue;
+                    bool busy;
+                    lock (_lock) busy = _inFlight.Contains(f);
+                    if (!busy) Enqueue(f, "rescan");
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Rescan of '{folder}' failed: {ex.Message}");
+            }
+        }
     }
 
     private void NotifyStatus(string status) => StatusChanged?.Invoke(status);

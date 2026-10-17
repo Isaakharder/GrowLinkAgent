@@ -41,7 +41,7 @@ public class CredentialService
         }
     }
 
-    public string? LoadKey()
+    public virtual string? LoadKey()
     {
         try
         {
@@ -105,7 +105,7 @@ public class CredentialService
         }
     }
 
-    public string? LoadRouteKey(string keySlot)
+    public virtual string? LoadRouteKey(string keySlot)
     {
         if (string.IsNullOrWhiteSpace(keySlot))
             return null;

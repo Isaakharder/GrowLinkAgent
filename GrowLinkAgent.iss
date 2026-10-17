@@ -7,7 +7,7 @@
 
 #define AppName      "GrowLinkAgent"
 #define AppPublisher "GrowLink"
-#define AppVersion   "1.0.0"
+#define AppVersion   "1.1.0"
 #define AppExeName   "GrowLinkAgent.exe"
 #define SourceDir    "c:\GrowLinkAgent\publish"
 

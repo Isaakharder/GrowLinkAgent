@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cross-platform tests of the agent's services (upload, retry, folder watching, parsing)
+    without Windows Forms: they compile the same source files as the app, so they run on
+    any OS (dotnet test). Windows-only pieces (the form, DPAPI) are exercised by the
+    Windows test project and by hand.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The agent's version, as sent in agent_version. -->
+    <Version>1.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Services\*.cs" Link="Agent\Services\%(Filename)%(Extension)" />
+    <Compile Include="..\Models\*.cs" Link="Agent\Models\%(Filename)%(Extension)" />
+    <Compile Include="..\GrowLinkAgent.Tests\BlockSummaryCsvParserTimezoneTests.cs" Link="BlockSummaryCsvParserTimezoneTests.cs" />
+    <None Include="..\GrowLinkAgent.Tests\SampleFiles\*.csv" Link="SampleFiles\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

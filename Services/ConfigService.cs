@@ -5,18 +5,22 @@ namespace FlowMasterAgent.Services;
 
 public class ConfigService
 {
-    private static readonly string ConfigDir = Path.Combine(
+    private static readonly string DefaultConfigDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GrowLinkAgent");
 
-    private static readonly string ConfigPath = Path.Combine(ConfigDir, "config.json");
+    private readonly string ConfigDir;
+    private readonly string ConfigPath;
 
     private readonly LogService _log;
     private AppConfig _config = new();
 
-    public ConfigService(LogService log)
+    /// <param name="configDir">Where config.json lives (default %APPDATA%\GrowLinkAgent; tests use a temporary folder).</param>
+    public ConfigService(LogService log, string? configDir = null)
     {
         _log = log;
+        ConfigDir = configDir ?? DefaultConfigDir;
+        ConfigPath = Path.Combine(ConfigDir, "config.json");
         Load();
     }
 
