@@ -21,7 +21,7 @@ function Setup([string] $exe, [string] $name, [string[]] $extra = @()) {
     $log = Join-Path (Resolve-Path $Out) "$name.log"
     # Wait for setup itself only: Start-Process -Wait would also wait for the agent setup starts at the end.
     $p = Start-Process $exe -ArgumentList (@('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"") + $extra) -PassThru
-    if (-not $p.WaitForExit(600000)) { throw "$name: setup did not finish within 10 minutes" }
+    if (-not $p.WaitForExit(600000)) { throw "${name}: setup did not finish within 10 minutes" }
     return @{ Code = $p.ExitCode; Log = (Get-Content $log -Raw) }
 }
 function Agents { @(Get-CimInstance Win32_Process -Filter "Name = 'GrowLinkAgent.exe'") }
