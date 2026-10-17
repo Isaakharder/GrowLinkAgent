@@ -50,10 +50,12 @@ jobs:
 
       - name: Install / upgrade / rollback / uninstall tests
         shell: pwsh
+        timeout-minutes: 15
         run: ./tools/installer-test.ps1 -New installer/GrowLinkAgent-1.1.0-Setup.exe -Rollback installer/GrowLinkAgent-1.0.1-Setup.exe -Original installer-legacy/GrowLinkAgent-1.0.1-original-Setup.exe -Out test-results
 
       - name: Standard (non-administrator) user install
         shell: pwsh
+        timeout-minutes: 10
         continue-on-error: true
         run: ./tools/installer-test-standard-user.ps1 -New installer/GrowLinkAgent-1.1.0-Setup.exe -Out test-results
 

@@ -19,7 +19,9 @@ function Check([bool] $ok, [string] $what) {
 }
 function Setup([string] $exe, [string] $name, [string[]] $extra = @()) {
     $log = Join-Path (Resolve-Path $Out) "$name.log"
-    $p = Start-Process $exe -ArgumentList (@('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"") + $extra) -Wait -PassThru
+    # Wait for setup itself only: Start-Process -Wait would also wait for the agent setup starts at the end.
+    $p = Start-Process $exe -ArgumentList (@('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"") + $extra) -PassThru
+    if (-not $p.WaitForExit(600000)) { throw "$name: setup did not finish within 10 minutes" }
     return @{ Code = $p.ExitCode; Log = (Get-Content $log -Raw) }
 }
 function Agents { @(Get-CimInstance Win32_Process -Filter "Name = 'GrowLinkAgent.exe'") }
@@ -144,7 +146,8 @@ Check ($r.Code -eq 0 -and (Get-Item "$legacyDir\GrowLinkAgent.exe").VersionInfo.
 
 # ── Uninstall keeps settings and files ───────────────────────────────────────
 $uninst = (Get-ItemProperty $hkcuKey).UninstallString.Trim('"')
-Start-Process $uninst -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+$u = Start-Process $uninst -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+$null = $u.WaitForExit(600000)
 Start-Sleep 3
 Check (-not (Test-Path "$legacyDir\GrowLinkAgent.exe")) 'uninstall: program removed'
 Check (-not (Test-Path $startup)) 'uninstall: Startup shortcut removed'

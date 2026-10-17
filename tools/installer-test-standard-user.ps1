@@ -17,7 +17,9 @@ try {
     $log = "C:\Users\Public\std-user-setup.log"
     Copy-Item $New C:\Users\Public\GrowLinkAgent-Setup.exe -Force
     $p = Start-Process C:\Users\Public\GrowLinkAgent-Setup.exe -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\Public `
-        -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"", '/TASKS=startup' -Wait -PassThru
+        -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"", '/TASKS=startup' -PassThru
+    # Wait for setup only (not for the agent it starts at the end).
+    $null = $p.WaitForExit(600000)
     Get-Process GrowLinkAgent -ErrorAction SilentlyContinue | Stop-Process -Force
     $exe = "C:\Users\$user\AppData\Local\Programs\GrowLinkAgent\GrowLinkAgent.exe"
     $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
