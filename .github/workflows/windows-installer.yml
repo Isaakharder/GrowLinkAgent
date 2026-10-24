@@ -20,22 +20,33 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      # A step's result is only its last command's exit code, so every native command's exit
+      # code is checked explicitly. Both test projects run (so both sets of results are kept),
+      # then the step fails if either had a failing test.
       - name: Unit tests (Windows, incl. DPAPI and single instance)
+        shell: pwsh
         run: |
+          $failed = @()
           dotnet test GrowLinkAgent.Tests/GrowLinkAgent.Tests.csproj -c Release --logger "trx;LogFileName=windows-tests.trx" --results-directory test-results
+          if ($LASTEXITCODE -ne 0) { $failed += "GrowLinkAgent.Tests (exit $LASTEXITCODE)" }
           dotnet test GrowLinkAgent.CoreTests/GrowLinkAgent.CoreTests.csproj -c Release --logger "trx;LogFileName=core-tests.trx" --results-directory test-results
+          if ($LASTEXITCODE -ne 0) { $failed += "GrowLinkAgent.CoreTests (exit $LASTEXITCODE)" }
+          if ($failed) { Write-Host "::error::Tests failed: $($failed -join ', ')"; exit 1 }
 
       - name: Publish 1.1.0
         run: dotnet publish GrowLinkAgent.csproj -c Release -o publish
 
       - name: Build 1.1.0 installer
+        shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q /DAppVersion=1.1.0 /DSourceDir=publish /DOutputDir=installer GrowLinkAgent.iss
           Get-ChildItem installer
 
       - name: Build 1.0.1 (from tag v1.0.1) — original installer and rollback installer
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           git worktree add v101 v1.0.1
           dotnet publish v101/GrowLinkAgent.csproj -c Release -o publish-1.0.1
           # The original 1.0.x script as released (only its hard-coded build paths changed),
@@ -56,7 +67,6 @@ jobs:
       - name: Standard (non-administrator) user install
         shell: pwsh
         timeout-minutes: 10
-        continue-on-error: true
         run: ./tools/installer-test-standard-user.ps1 -New installer/GrowLinkAgent-1.1.0-Setup.exe -Out test-results
 
       - uses: actions/upload-artifact@v4
